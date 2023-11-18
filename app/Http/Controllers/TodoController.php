@@ -3,30 +3,17 @@
 namespace App\Http\Controllers;
 
 use App\Models\Todo;
+use Illuminate\Validation\Rule;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Validator;
 
 class TodoController extends Controller
 {
-  public function index(Request $request)
+  public function index()
   {
     $auth = Auth::user();
-
-    // Ambil query pencarian
-    $keywords = $request->query("keywords") ?? null;
-    $status = $request->query("status") ?? null;
-
-    $todos = Todo::where("user_id", $auth->id);
-    if($keywords != null){
-      $todos = $todos->where("activity", "LIKE", "%$keywords%");
-    }
-
-    if($status != null){
-      $todos = $todos->where("status", $status);
-    }
-    
-    $todos = $todos->orderBy("created_at", "desc")->get();
+    $todos = Todo::where("user_id", $auth->id)->orderBy("created_at", "desc")->get();
     $data = [
       "auth" => $auth,
       "todos" => $todos
@@ -36,54 +23,89 @@ class TodoController extends Controller
   }
 
   public function postAdd(Request $request)
-{
-    $validator = Validator::make($request->all(), [
-        'activity' => 'required|string|max:255'
-    ]);
+  {
+      $auth = Auth::user();
 
-    if ($validator->fails()) {
-        return redirect()
-            ->route('home')
-            ->withErrors($validator)
-            ->withInput();
-    }
+      $validator = Validator::make($request->all(), [
+          'activity' => [
+              'required',
+              'string',
+              'max:255',
+              Rule::unique('todos')->where(function ($query) use ($auth) {
+                  return $query->where('user_id', $auth->id);
+              }),
+          ],
+      ]);
 
-    
-    $auth = Auth::user();
+      $validator->after(function ($validator) use ($auth, $request) {
+          $input = $request->all(); // Get all data from the request object
+          if (Todo::where('activity', $input['activity'])
+              ->where('user_id', $auth->id)->exists()) {
+              $validator->errors()->add('activity', 'This activity already exists.');
+          }
+      });
 
-    Todo::create([
-      "user_id" => $auth->id,
-      "activity" => $request->activity,
-    ]);
+      if ($validator->fails()) {
+          return redirect()
+              ->route('home')
+              ->withErrors($validator)
+              ->withInput()
+              ->with('alertType', 'danger')
+              ->with('alertMessage', 'Aktivitas sudah ditambahkan sebelumnya.');
+      }
 
-    return redirect()->route("home");
+      Todo::create([
+          "user_id" => $auth->id,
+          "activity" => $request->activity,
+      ]);
+
+      return redirect()->route("home")
+          ->with('alertType', 'success')
+          ->with('alertMessage', 'Berhasil menambahkan aktivitas.');
   }
+
+
 
   public function postEdit(Request $request)
   {
-    $validator = Validator::make($request->all(), [
-        'id' => 'required|exists:todos',
-        'activity' => 'required|string|max:255',
-        'status' => 'required|boolean',
-    ]);
+      $validator = Validator::make($request->all(), [
+          'id' => 'required|exists:todos',
+          'activity' => 'required|string|max:255',
+          'status' => 'required|boolean',
+      ]);
 
-    if ($validator->fails()) {
-        return redirect()
-            ->route('home')
-            ->withErrors($validator)
-            ->withInput();
-    }
+      if ($validator->fails()) {
+          return redirect()
+              ->route('home')
+              ->withErrors($validator)
+              ->withInput();
+      }
 
-    $auth = Auth::user();
+      $auth = Auth::user();
+      $existingTodo = Todo::where('user_id', $auth->id)
+          ->where('activity', $request->activity)
+          ->where('id', '!=', $request->id)
+          ->first();
 
-    $todo = Todo::where("id", $request->id)->where("user_id", $auth->id)->first();
-    if ($todo) {
-      $todo->activity = $request->activity;
-      $todo->status = $request->status;
-      $todo->save();
-    }
+      if ($existingTodo) {
+          // Menampilkan pesan error jika aktivitas sudah ada
+          return redirect()
+              ->route('home')
+              ->withInput()
+              ->with('alertType', 'danger')
+              ->with('alertMessage', 'Aktivitas ini sudah ada sebelumnya.');
+      }
 
-    return redirect()->route("home");
+      $todo = Todo::where("id", $request->id)->where("user_id", $auth->id)->first();
+      if ($todo) {
+          $todo->activity = $request->activity;
+          $todo->status = $request->status;
+          $todo->save();
+      }
+
+      return redirect()->route("home")
+          ->with('alertType', 'success')
+          ->with('alertMessage', 'Todo item edited successfully.');
   }
 
   public function postDelete(Request $request)
@@ -106,6 +128,8 @@ class TodoController extends Controller
       $todo->delete();
     }
 
-    return redirect()->route("home");
+    return redirect()->route("home")
+      ->with('alertType', 'success')
+      ->with('alertMessage', 'Todo item deleted successfully.');
   }
 }
